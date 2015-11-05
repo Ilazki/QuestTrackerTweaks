@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Addon Author="Ilazki" APIVersion="11" Name="QuestTrackerTweaks" Description="Modifications to the Carbine QuestTracker">
+    <Script Name="QuestTrackerTweaks.lua"/>
+    <Form Name="QuestTrackerTweaks.xml"/>
+</Addon>
