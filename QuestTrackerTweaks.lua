@@ -27,7 +27,10 @@ function QuestTrackerTweaks:Init()
 	local bHasConfigureFunction = false
 	local strConfigureButtonText = ""
 	local tDependencies = {
-		"QuestTracker"
+	   "QuestTracker",
+	   "SimpleQuestTracker",    -- Try to load after SQT to inject tweaks.  No idea if it works.
+	   "QuestTracker_CRB",      -- Local copy of Carbine's tracker for edits and testing. Unused
+	                            -- outside of development.
 	}
     Apollo.RegisterAddon(self, bHasConfigureFunction, strConfigureButtonText, tDependencies)
 end
@@ -57,6 +60,16 @@ function QuestTrackerTweaks:OnDocumentReady()
 	end
 end
 
+
+function QuestTrackerTweaks:OnDependencyError(dep, err)
+--- QuestTracker is only hard dependnecy; don't freak out over SQT or my copy of CRB's tracker
+   if dep ~= "QuestTracker" then return true end
+   return true
+   
+end
+
+   
+
 -----------------------------------------------------------------------------------------------
 -- Other Functions
 -----------------------------------------------------------------------------------------------
@@ -64,8 +77,8 @@ end
 --- This function adds an Abandon handler to QuestTracker, loads a modified rightclick form,
 --- and overrides QuestTracker:ShowRightClick() to use the new form and handler.
 function QuestTrackerTweaks.ReplaceQTRightClick()
-	QuestTracker = Apollo.GetAddon("QuestTracker")
-	if not QuestTracker then return nil end
+   QuestTracker = Apollo.GetAddon("QuestTracker") or Apollo.GetAddon("QuestTracker_CRB")
+   if not QuestTracker then return nil end
 
 	--- Add an "Abandon" handler method to the QuestTracker
 	function QuestTracker:OnRightClickAbandonBtn( wndHandler, wndControl)
