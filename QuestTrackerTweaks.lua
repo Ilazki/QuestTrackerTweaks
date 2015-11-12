@@ -79,7 +79,7 @@ end
 function QuestTrackerTweaks:OnDependencyError(dep, err)
 --- QuestTracker is only hard dependnecy; don't freak out over SQT or my copy of CRB's tracker
    if dep ~= "QuestTracker" then return true end
-   return true
+--   return true
    
 end
 
