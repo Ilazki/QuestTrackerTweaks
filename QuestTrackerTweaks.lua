@@ -11,7 +11,8 @@ require "Window"
 local QuestTrackerTweaks = {}
 
 --- Forward declarations
-local returnQuestTracker
+local returnQuestTracker   -- Returns the Quest Tracker object
+local qtswap = {}          -- Holds all the replacement functions to merge
 
 --- Constants used internally by QuestTracker that must be recreated here for overriden bits.
 local knXCursorOffset = 10
@@ -42,7 +43,6 @@ function QuestTrackerTweaks:Init()
     Apollo.RegisterAddon(self, bHasConfigureFunction, strConfigureButtonText, tDependencies)
 end
 
-
 -----------------------------------------------------------------------------------------------
 -- OnLoad & OnDocLoaded
 -----------------------------------------------------------------------------------------------
@@ -62,22 +62,27 @@ function QuestTrackerTweaks:OnDocumentReady()
 
 	    self.wndMain:Show(false, true)
 
-		--- Replace QuestTracker's right click menu
+		--- Start mutating the Quest Tracker
 		local QT = returnQuestTracker()
 		if QT then
-		   self:ReplaceQTRightClick(QT)
-		   self:ReplaceHintArrowHelper(QT)
+		   -- Merge in any functions in qtswap first.
+		   for k,v in pairs(qtswap) do
+			  QT[k] = v
+		   end
+
+		   -- Any other changes that need to be made go here.
+		   
 		   -- Something to experiment with to tweak performance/responsiveness tradeoff.
 		   -- Not ready to use it yet.
-		   -- QT.timerRealTimeUpdate = ApolloTimer.Create(10.0, true, "OnRealTimeUpdateTimer", self)
-		   -- QT.timerRealTimeUpdate:Stop()
+--		    QT.timerRealTimeUpdate = ApolloTimer.Create(3.0, true, "OnRealTimeUpdateTimer", self)
+--		    QT.timerRealTimeUpdate:Stop()
 		end
 	end
 end
 
 
 function QuestTrackerTweaks:OnDependencyError(dep, err)
---- QuestTracker is only hard dependnecy; don't freak out over SQT or my copy of CRB's tracker
+--- QuestTracker is only hard dependency; don't freak out over SQT or my test copy of CRB's tracker
    if dep ~= "QuestTracker" then return true end
 --   return true
    
@@ -94,115 +99,161 @@ returnQuestTracker = function()
    return Apollo.GetAddon("QuestTracker") or Apollo.GetAddon("QuestTracker_CRB")
 end
 
+
+
+function qtswap:Reset()
+   self:BuildAll()
+   self:ResizeAll()
+end
+   
+function qtswap:Derp(str)
+   Print("Derp: " .. tostring(str))
+end
+
+
+----------------------------
+-- Replace OnStateChanged
+----------------------------
+
+-- REASONS
+--  1. Usability:  accepting a new quest should not obliterate existing tracked quest.
+--  2. Bug:  accepting new quests results in multiple selected quests in default tracker.
+
+function qtswap:OnQuestStateChanged(queQuest, eState)
+   local oInteractObject       = GameLib.GetInteractHintArrowObject() or {}
+   local hintObjIsQuest        = oInteractObject.eHintArrowType == GameLib.CodeEnumHintType.Quest
+   local hintObjIsCurrentQuest = hintObjIsQuest and oInteractObject.objTarget:GetId() == queQuest:GetId()
+
+   -- Destroy quest and wipe hint arrows if the quest is no longer in achieved or accepted states.
+   if eState ~= Quest.QuestState_Achieved and eState ~= Quest.QuestState_Accepted then
+	  self:DestroyQuest(queQuest)
+	  if hintObjIsCurrentQuest then
+		 GameLib.SetInteractHintArrowObject(nil) end
+	  self.timerResizeDelay:Start()
+	  return
+   end
+
+   -- Quest is achieved or accepted and should be drawn.
+   
+   -- This check is what was causing the multi-selection problem by drawing new
+   --   hint arrows without clearing previous.  It was unwanted behaviour if
+   --   already targeting a quest any way, so I now check and only apply new
+   --   hint arrow if the hint arrow was a non-quest.
+
+   if eState == Quest.QuestState_Accepted then
+	  --Add new quests to saved hint arrow.
+	  if not hintObjIsQuest then  -- Don't obliterate existing quest hints.
+		 GameLib.SetInteractHintArrowObject(queQuest) end
+   end
+   self:DrawQuest(queQuest)
+   self.timerResizeDelay:Start()
+end
+
 ----------------------------
 -- ReplaceHintArrowHelper
 ----------------------------
 
---- Overrides the Hint Arrow Helper to add more user-friendly behaviour.  In this version, if
---- the selected objective is completed, it selects the first uncompleted objective in the
---- same quest.  This makes more sense than the Carbine version selecting the overarching
---- quest because it makes the interact key more useful for quest pointing.
---- Acts the same as Carbine's version in any other case.
-function QuestTrackerTweaks:ReplaceHintArrowHelper(QuestTracker)
-   --- The new QuestTracker function.
-   function QuestTracker:HelperSelectInteractHintArrowObject(oCur, wndBtn)
+-- TODO:  Refactor the Carbine code for readability.
 
-	  --- Takes one quest argument and returns two:
-	  ---  1: the QuestTracker's objWnd UI element for the quest's first uncompleted Objective
-	  ---  2: the index vale of the Objective.
+-- REASONS
+--  1. Usability:  completing the selected quest objective should select a sibling objective,
+--       not the objective's parent quest.  This makes the interact key more useful for questing.
 
-	  --- local function to avoid extra-deep nesting.  QT code is already bad enough about it
-	  --- without me contributing to the mess in here.
-	  local function getObjectiveWnd(currentQuest)
-		 local questID   = currentQuest:GetId()
-		 local objCount  = currentQuest:GetObjectiveCount()
-		 for i = 0, objCount - 1 do
-			local objKey = questID .. "O" .. i   --- QT caches objective info in a table using
-			                                     --- Quest ID + Objective Index
-			                                     --- Format: qqqqOi, with uppercase o as a
-			                                     --- separator between quest ID and index.
-			local objWnd = self.tObjectiveWndCache[objKey]
-			if objWnd and currentQuest:GetObjectiveCompleted(i) == 0 then return objWnd end
-		 end
-	  end
+function qtswap:HelperSelectInteractHintArrowObject(oCur, wndBtn)
 
-	  --- Carbine code, umodified
-	  local oInteractObject = GameLib.GetInteractHintArrowObject()
-	  if not oInteractObject or (oInteractObject and oInteractObject.eHintArrowType == GameLib.CodeEnumHintType.None) then
-		 return
-	  end
-
-	  local bIsInteractHintArrowObject = oInteractObject.objTarget and oInteractObject.objTarget == oCur
-	  if bIsInteractHintArrowObject and not wndBtn:IsChecked() then
-
-		 --- Try to get the objWnd object for an uncompleted sibling Objective to the current quest.
-		 --- If successful, selects that Objective as the new quest object.  
-		 local objWnd, objIndex = getObjectiveWnd(oCur)
-		 if objWnd then
-			objWnd.wndObjective:FindChild("QuestObjectiveBtn"):SetCheck(true)
-			GameLib.SetInteractHintArrowObject(oCur, objIndex)
-		 else
-			--- Otherwise, revert to Carbine's behaviour.
-			wndBtn:SetCheck(true)
-		 end
-	 
+   --- Takes one quest argument and returns two:
+   ---  1: the QuestTracker's objWnd UI element for the quest's first uncompleted Objective
+   ---  2: the index vale of the Objective.
+   local function getObjectiveWnd(currentQuest)
+	  local questID   = currentQuest:GetId()
+	  local objCount  = currentQuest:GetObjectiveCount()
+	  for i = 0, objCount - 1 do
+		 local objKey = questID .. "O" .. i   --- QT caches objective info in a table using
+		 --- Quest ID + Objective Index
+		 --- Format: qqqqOi, with uppercase o as a
+		 --- separator between quest ID and index.
+		 local objWnd = self.tObjectiveWndCache[objKey]
+		 if objWnd and currentQuest:GetObjectiveCompleted(i) == 0 then return objWnd end
 	  end
    end
-   
+
+   --- Carbine code, umodified
+   local oInteractObject = GameLib.GetInteractHintArrowObject()
+   if not oInteractObject or (oInteractObject and oInteractObject.eHintArrowType == GameLib.CodeEnumHintType.None) then
+	  return
+   end
+
+   local bIsInteractHintArrowObject = oInteractObject.objTarget and oInteractObject.objTarget == oCur
+   if bIsInteractHintArrowObject and not wndBtn:IsChecked() then
+
+	  --- Try to get the objWnd object for an uncompleted sibling Objective to the current quest.
+	  --- If successful, selects that Objective as the new quest object.
+	  --  Possibly too conservative, because it's not selecting new objectives that replace
+	  --    just-completed objectives in same quest.  
+	  local objWnd, objIndex = getObjectiveWnd(oCur)
+	  if objWnd then
+		 objWnd.wndObjective:FindChild("QuestObjectiveBtn"):SetCheck(true)
+		 GameLib.SetInteractHintArrowObject(oCur, objIndex)
+	  else
+		 --- Otherwise, revert to Carbine's behaviour.
+		 wndBtn:SetCheck(true)
+	  end
+	  
+   end
 end
 
--------------------------
--- ReplaceQTRightClick
--------------------------
+---------------------------------------------
+-- Replace ShowQuestRightClick
+--   and new OnRightClickAbandonBtn handler
+---------------------------------------------
 
---- This function adds an Abandon handler to QuestTracker, loads a modified rightclick form,
---- and overrides QuestTracker:ShowRightClick() to use the new form and handler.
-function QuestTrackerTweaks:ReplaceQTRightClick(QuestTracker)
-   --- Add an "Abandon" handler method to the QuestTracker that gets called by the new popup
-	function QuestTracker:OnRightClickAbandonBtn( wndHandler, wndControl)
-		local queQuest = wndHandler:GetData()
-    --- Unpin quest before abandoning to avoid some pinned quests crashing the tracker.
-    self.tPinned.tQuests[queQuest:GetId()] = nil
+--- Add an "Abandon" handler method to the QuestTracker that gets called by the new popup
+function qtswap:OnRightClickAbandonBtn( wndHandler, wndControl)
+   local queQuest = wndHandler:GetData()
+   --- Unpin quest before abandoning to avoid some pinned quests crashing the tracker.
+   self.tPinned.tQuests[queQuest:GetId()] = nil
 
-	 	queQuest:SetActiveQuest(false)
-		queQuest:Abandon()
-		self:OnQuestTrackerRightClickClose()
+   queQuest:SetActiveQuest(false)
+   queQuest:Abandon()
+   self:OnQuestTrackerRightClickClose()
 
-	end
-	--- Load the replacement Form and set a couple variables the normal tracker uses internally
-	--- since they aren't accesible here.
-	local rightClickReplace = Apollo.GetAddon("QuestTrackerTweaks").xmlDoc
-
-	--- Mostly duplicated from the Carbine quest tracker.
-	--- Changed or added lines are commented with "--- Ilazki" so I know what to edit whenever
-	--- I need to update the function with changed Carbine code.
-	function QuestTracker:ShowQuestRightClick(queQuest)
-		self:OnQuestTrackerRightClickClose()
-
-		self.wndQuestRightClick = Apollo.LoadForm(rightClickReplace, "QuestTrackerRightClick", nil, self)	--- Ilazki
-		self.wndQuestRightClick:FindChild("RightClickOpenLogBtn"):SetData(queQuest)
-		self.wndQuestRightClick:FindChild("RightClickShareQuestBtn"):SetData(queQuest)
-		self.wndQuestRightClick:FindChild("RightClickLinkToChatBtn"):SetData(queQuest)
-		self.wndQuestRightClick:FindChild("RightClickMaxMinBtn"):SetData(queQuest)
-		self.wndQuestRightClick:FindChild("RightClickPinUnpinBtn"):SetData(queQuest)
-		self.wndQuestRightClick:FindChild("RightClickHideBtn"):SetData(queQuest)
-		self.wndQuestRightClick:FindChild("RightClickAbandonBtn"):SetData(queQuest)							--- Ilakzi
-
-		self.wndQuestRightClick:FindChild("RightClickShareQuestBtn"):Enable(queQuest:CanShare())
-
-		local nQuestId = queQuest:GetId()
-		local bAlreadyMinimized = nQuestId and self.tMinimized.tQuests[nQuestId]
-		self.wndQuestRightClick:FindChild("RightClickMaxMinBtn"):SetText(bAlreadyMinimized and Apollo.GetString("QuestTracker_Expand") or Apollo.GetString("QuestTracker_Minimize"))
-		self.wndQuestRightClick:FindChild("RightClickMaxMinBtn"):Enable(queQuest and queQuest:GetState() ~= Quest.QuestState_Botched)
-
-		local bAlreadyPinned = nQuestId and self.tPinned.tQuests[nQuestId]
-		self.wndQuestRightClick:FindChild("RightClickPinUnpinBtn"):SetText(bAlreadyPinned and Apollo.GetString("QuestTracker_Unpin") or Apollo.GetString("QuestTracker_Pin"))
-
-		local tCursor = Apollo.GetMouse()
-		local nWidth = self.wndQuestRightClick:GetWidth()
-		self.wndQuestRightClick:Move(tCursor.x - nWidth + knXCursorOffset, tCursor.y - knYCursorOffset, nWidth, self.wndQuestRightClick:GetHeight())
-	end
 end
+
+
+-- TODO:  Refactor Carbine's code for readability.
+
+--- Mostly duplicated from the Carbine quest tracker.
+--- Changed or added lines are commented with "--- Ilazki" so I know what to edit whenever
+--- I need to update the function with changed Carbine code.
+function qtswap:ShowQuestRightClick(queQuest)
+   self:OnQuestTrackerRightClickClose()
+   --- Load the replacement Form 
+   local rightClickReplace = Apollo.GetAddon("QuestTrackerTweaks").xmlDoc
+
+   self.wndQuestRightClick = Apollo.LoadForm(rightClickReplace, "QuestTrackerRightClick", nil, self)	--- Ilazki
+   self.wndQuestRightClick:FindChild("RightClickOpenLogBtn"):SetData(queQuest)
+   self.wndQuestRightClick:FindChild("RightClickShareQuestBtn"):SetData(queQuest)
+   self.wndQuestRightClick:FindChild("RightClickLinkToChatBtn"):SetData(queQuest)
+   self.wndQuestRightClick:FindChild("RightClickMaxMinBtn"):SetData(queQuest)
+   self.wndQuestRightClick:FindChild("RightClickPinUnpinBtn"):SetData(queQuest)
+   self.wndQuestRightClick:FindChild("RightClickHideBtn"):SetData(queQuest)
+   self.wndQuestRightClick:FindChild("RightClickAbandonBtn"):SetData(queQuest)							--- Ilakzi
+
+   self.wndQuestRightClick:FindChild("RightClickShareQuestBtn"):Enable(queQuest:CanShare())
+
+   local nQuestId = queQuest:GetId()
+   local bAlreadyMinimized = nQuestId and self.tMinimized.tQuests[nQuestId]
+   self.wndQuestRightClick:FindChild("RightClickMaxMinBtn"):SetText(bAlreadyMinimized and Apollo.GetString("QuestTracker_Expand") or Apollo.GetString("QuestTracker_Minimize"))
+   self.wndQuestRightClick:FindChild("RightClickMaxMinBtn"):Enable(queQuest and queQuest:GetState() ~= Quest.QuestState_Botched)
+
+   local bAlreadyPinned = nQuestId and self.tPinned.tQuests[nQuestId]
+   self.wndQuestRightClick:FindChild("RightClickPinUnpinBtn"):SetText(bAlreadyPinned and Apollo.GetString("QuestTracker_Unpin") or Apollo.GetString("QuestTracker_Pin"))
+
+   local tCursor = Apollo.GetMouse()
+   local nWidth = self.wndQuestRightClick:GetWidth()
+   self.wndQuestRightClick:Move(tCursor.x - nWidth + knXCursorOffset, tCursor.y - knYCursorOffset, nWidth, self.wndQuestRightClick:GetHeight())
+end
+
 
 -----------------------------------------------------------------------------------------------
 -- QuestTrackerTweaksForm Functions
