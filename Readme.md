@@ -10,6 +10,7 @@ This addon *may* work with Simple Quest Tracker, but consider it untested and un
 
 * Add an "Abandon" menu entry to the tracker's right-click popup menu, underneath the "Hide" button.  No need to use the quest log to drop quests any more.
 * Changed the behaviour of objective selection when completing a selected objective.  When the selected objective is completed, the tracker now attempts to select the first uncompleted objective within the same quest.  If this fails it reverts to the default tracker behaviour of selecting the quest itself.
+* Picking up new quests no longer replaces an existing hint arrow for a selected quest.  This fixes a problem where picking up multiple quests results in multiple quests appearing targeted by not replacing an existing quest selection.  In addition to not being as buggy, this should also be more sane than the original behaviour.  **Note:**  the original behaviour is still present if a challenge, event, or path mission is selected when accepting a quest.  This may be changed later.
 
 
 ## Future Ideas
